@@ -1,0 +1,15 @@
+/* App-level styles & mobile overrides */
+
+@media (max-width: 768px) {
+  #hamburger {
+    display: flex !important;
+  }
+
+  .mobile-close {
+    display: flex !important;
+  }
+
+  .auth-card {
+    padding: 24px !important;
+  }
+}

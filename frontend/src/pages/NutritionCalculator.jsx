@@ -1,35 +1,51 @@
+
 import { useState, useEffect, useCallback } from 'react';
 import { nutritionAPI, authAPI } from '../services/api';
 import { showToast } from '../utils/toast';
-import NutritionCard from '../components/NutritionCard';
 import Footer from '../components/Footer';
-import { Plus, Trash2, Edit2, Search, Calculator, X, Check } from 'lucide-react';
+import { Plus, Trash2, Edit2, Search, Calculator, X, Check, Calendar, FileSpreadsheet, Table2, RefreshCw } from 'lucide-react';
+import { exportToExcel } from '../utils/exportExcel';
 
-const MEAL_TYPES = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'];
+const MEAL_TYPES      = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'];
 const ACTIVITY_LEVELS = ['Sedentary', 'Lightly Active', 'Moderately Active', 'Very Active', 'Athlete'];
-const FITNESS_GOALS = ['Weight Loss', 'Weight Maintenance', 'Weight Gain', 'Muscle Gain'];
+const FITNESS_GOALS   = ['Weight Loss', 'Weight Maintenance', 'Weight Gain', 'Muscle Gain'];
+const emptyMeal       = { meal_type: 'Breakfast', food_name: '', quantity: 1, calories: 0, protein: 0, carbohydrates: 0, fat: 0, fiber: 0 };
 
-const emptyMeal = { meal_type: 'Breakfast', food_name: '', quantity: 1, calories: 0, protein: 0, carbohydrates: 0, fat: 0, fiber: 0 };
+const MEAL_COLORS = { Breakfast: '#ff9800', Lunch: '#4caf50', Dinner: '#2196f3', Snacks: '#9c27b0' };
+
+/* ── Macro stat mini card (top row) ── */
+function MacroTopCard({ label, value, unit, color, sub }) {
+  return (
+    <div className="stat-card" style={{ borderBottom: '3px solid ' + color, padding: '16px' }}>
+      <div style={{ fontSize: '10px', fontWeight: '700', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>
+        {label}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '3px' }}>
+        <span style={{ fontSize: '26px', fontWeight: '800', fontFamily: 'var(--font-display)', color }}>{typeof value === 'number' ? Math.round(value) : value ?? 0}</span>
+        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{unit}</span>
+      </div>
+      {sub && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>{sub}</div>}
+      <div style={{ height: '3px', borderRadius: '99px', background: color, marginTop: '8px', width: '100%' }} />
+    </div>
+  );
+}
 
 function GoalBar({ label, icon, consumed, goal, unit, color }) {
-  const pct = Math.min(Math.round((consumed / (goal || 1)) * 100), 100);
+  const pct     = Math.min(Math.round((consumed / (goal || 1)) * 100), 100);
   const exceeded = consumed > goal;
-  let barColor = color;
-  if (pct >= 100) barColor = '#10b981';
-  else if (pct >= 80) barColor = '#f59e0b';
-  if (exceeded) barColor = '#ef4444';
+  const barColor = exceeded ? '#e53935' : color;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', alignItems: 'center' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', alignItems: 'center' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'var(--text-secondary)', fontWeight: '500' }}>
           {icon} {label}
         </span>
-        <div style={{ display: 'flex', gap: '12px', fontSize: '12px' }}>
-          <span style={{ color: barColor, fontWeight: '700' }}>{typeof consumed === 'number' ? consumed.toFixed(consumed % 1 === 0 ? 0 : 1) : consumed} {unit}</span>
-          <span style={{ color: 'var(--text-secondary)' }}>/ {typeof goal === 'number' ? goal.toFixed(goal % 1 === 0 ? 0 : 1) : goal} {unit}</span>
-          <span style={{ color: exceeded ? '#ef4444' : '#10b981', fontWeight: '600' }}>
-            {exceeded ? `+${(consumed - goal).toFixed(1)}` : `${(goal - consumed).toFixed(1)} left`}
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <span style={{ color: barColor, fontWeight: '700' }}>{typeof consumed === 'number' ? consumed.toFixed(0) : consumed} {unit}</span>
+          <span style={{ color: 'var(--text-secondary)' }}>/ {typeof goal === 'number' ? goal.toFixed(0) : goal} {unit}</span>
+          <span style={{ color: exceeded ? '#e53935' : '#4caf50', fontWeight: '600' }}>
+            {exceeded ? `+${(consumed - goal).toFixed(0)}` : `${(goal - consumed).toFixed(0)} left`}
           </span>
         </div>
       </div>
@@ -40,77 +56,20 @@ function GoalBar({ label, icon, consumed, goal, unit, color }) {
   );
 }
 
-function MealSection({ mealType, meals, onEdit, onDelete }) {
-  const totals = meals.reduce((acc, m) => ({
-    cal: acc.cal + (m.calories || 0), prot: acc.prot + (m.protein || 0),
-    carbs: acc.carbs + (m.carbohydrates || 0), fat: acc.fat + (m.fat || 0), fib: acc.fib + (m.fiber || 0),
-  }), { cal: 0, prot: 0, carbs: 0, fat: 0, fib: 0 });
-
-  const icons = { Breakfast: '🌅', Lunch: '☀️', Dinner: '🌙', Snacks: '🍎' };
-
-  return (
-    <div className="glass-panel-2" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontWeight: '700', fontSize: '15px' }}>{icons[mealType]} {mealType}</span>
-        {meals.length > 0 && (
-          <span style={{ fontSize: '12px', color: '#f59e0b', fontWeight: '600' }}>{Math.round(totals.cal)} kcal</span>
-        )}
-      </div>
-      {meals.length === 0 ? (
-        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', textAlign: 'center', padding: '12px 0' }}>No foods added yet</p>
-      ) : (
-        <table className="data-table" style={{ fontSize: '13px' }}>
-          <thead>
-            <tr>
-              <th>Food</th>
-              <th>Qty</th>
-              <th>Cal</th>
-              <th>Prot</th>
-              <th>Carbs</th>
-              <th>Fat</th>
-              <th style={{ width: '60px' }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {meals.map(m => (
-              <tr key={m.id}>
-                <td style={{ fontWeight: '500' }}>{m.food_name}</td>
-                <td style={{ color: 'var(--text-secondary)' }}>{m.quantity}g</td>
-                <td style={{ color: '#f59e0b' }}>{m.calories}</td>
-                <td style={{ color: '#3b82f6' }}>{m.protein}g</td>
-                <td style={{ color: '#8b5cf6' }}>{m.carbohydrates}g</td>
-                <td style={{ color: '#f59e0b' }}>{m.fat}g</td>
-                <td>
-                  <div style={{ display: 'flex', gap: '4px' }}>
-                    <button onClick={() => onEdit(m)} style={{
-                      background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', padding: '2px',
-                    }}><Edit2 size={13} /></button>
-                    <button onClick={() => onDelete(m.id)} style={{
-                      background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '2px',
-                    }}><Trash2 size={13} /></button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
 export default function NutritionCalculator({ date }) {
-  const [goals, setGoals] = useState(null);
-  const [meals, setMeals] = useState([]);
-  const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [showCalcForm, setShowCalcForm] = useState(false);
+  const [goals,         setGoals]         = useState(null);
+  const [meals,         setMeals]         = useState([]);
+  const [profile,       setProfile]       = useState(null);
+  const [loading,       setLoading]       = useState(true);
+  const [showCalcForm,  setShowCalcForm]  = useState(false);
   const [showMealModal, setShowMealModal] = useState(false);
-  const [editingMeal, setEditingMeal] = useState(null);
-  const [mealForm, setMealForm] = useState({ ...emptyMeal, date });
-  const [foodSearch, setFoodSearch] = useState('');
-  const [foodResults, setFoodResults] = useState([]);
-  const [calcForm, setCalcForm] = useState({});
+  const [editingMeal,   setEditingMeal]   = useState(null);
+  const [mealForm,      setMealForm]      = useState({ ...emptyMeal, date });
+  const [foodSearch,    setFoodSearch]    = useState('');
+  const [foodResults,   setFoodResults]   = useState([]);
+  const [calcForm,      setCalcForm]      = useState({});
+  const [activeTab,     setActiveTab]     = useState('log');  // 'log' | 'live'
+  const [lastUpdated,   setLastUpdated]   = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -123,21 +82,19 @@ export default function NutritionCalculator({ date }) {
       const p = profileRes.data;
       setProfile(p);
       setCalcForm({
-        age: p.profile?.age || '', gender: p.profile?.gender || 'Male',
-        height: p.profile?.height || '', weight: p.profile?.weight || '',
+        age:            p.profile?.age            || '',
+        gender:         p.profile?.gender         || 'Male',
+        height:         p.profile?.height         || '',
+        weight:         p.profile?.weight         || '',
         activity_level: p.profile?.activity_level || 'Moderately Active',
-        fitness_goal: p.profile?.fitness_goal || 'Weight Maintenance',
+        fitness_goal:   p.profile?.fitness_goal   || 'Weight Maintenance',
       });
-    } catch {
-      showToast('Failed to load data', 'error');
-    } finally {
-      setLoading(false);
-    }
+    } catch { showToast('Failed to load data', 'error'); }
+    finally { setLoading(false); }
   }, [date]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Also load goals when profile is ready
   useEffect(() => {
     if (!profile) return;
     nutritionAPI.calculateGoals({
@@ -148,9 +105,11 @@ export default function NutritionCalculator({ date }) {
   }, [profile]);
 
   const totals = meals.reduce((acc, m) => ({
-    calories: acc.calories + (m.calories || 0), protein: acc.protein + (m.protein || 0),
-    carbohydrates: acc.carbohydrates + (m.carbohydrates || 0), fat: acc.fat + (m.fat || 0),
-    fiber: acc.fiber + (m.fiber || 0),
+    calories:      acc.calories      + (m.calories      || 0),
+    protein:       acc.protein       + (m.protein       || 0),
+    carbohydrates: acc.carbohydrates + (m.carbohydrates || 0),
+    fat:           acc.fat           + (m.fat           || 0),
+    fiber:         acc.fiber         + (m.fiber         || 0),
   }), { calories: 0, protein: 0, carbohydrates: 0, fat: 0, fiber: 0 });
 
   const handleRecalculate = async () => {
@@ -160,9 +119,7 @@ export default function NutritionCalculator({ date }) {
       setGoals(res.data);
       setShowCalcForm(false);
       showToast('Nutrition goals updated!', 'success');
-    } catch {
-      showToast('Failed to calculate goals', 'error');
-    }
+    } catch { showToast('Failed to calculate goals', 'error'); }
   };
 
   const handleFoodSearch = async (q) => {
@@ -180,21 +137,12 @@ export default function NutritionCalculator({ date }) {
     setFoodSearch('');
   };
 
-  const openAddMeal = (type = 'Breakfast') => {
-    setEditingMeal(null);
-    setMealForm({ ...emptyMeal, date, meal_type: type });
-    setShowMealModal(true);
-  };
-
-  const openEditMeal = (meal) => {
-    setEditingMeal(meal);
-    setMealForm({ ...meal });
-    setShowMealModal(true);
-  };
+  const openAddMeal  = (type = 'Breakfast') => { setEditingMeal(null); setMealForm({ ...emptyMeal, date, meal_type: type }); setShowMealModal(true); };
+  const openEditMeal = (meal) => { setEditingMeal(meal); setMealForm({ ...meal }); setShowMealModal(true); };
 
   const handleSaveMeal = async () => {
     if (!mealForm.food_name.trim()) { showToast('Food name is required', 'error'); return; }
-    if (!mealForm.calories) { showToast('Calories are required', 'error'); return; }
+    if (!mealForm.calories)          { showToast('Calories are required', 'error'); return; }
     try {
       const payload = { ...mealForm, date, quantity: Number(mealForm.quantity), calories: Number(mealForm.calories), protein: Number(mealForm.protein), carbohydrates: Number(mealForm.carbohydrates), fat: Number(mealForm.fat), fiber: Number(mealForm.fiber) };
       if (editingMeal) {
@@ -206,17 +154,12 @@ export default function NutritionCalculator({ date }) {
       }
       setShowMealModal(false);
       loadData();
-    } catch (err) {
-      showToast(err.response?.data?.detail || 'Failed to save meal', 'error');
-    }
+    } catch (err) { showToast(err.response?.data?.detail || 'Failed to save meal', 'error'); }
   };
 
   const handleDeleteMeal = async (id) => {
-    try {
-      await nutritionAPI.deleteMeal(id);
-      showToast('Meal deleted', 'success');
-      loadData();
-    } catch { showToast('Failed to delete', 'error'); }
+    try { await nutritionAPI.deleteMeal(id); showToast('Meal deleted', 'success'); loadData(); }
+    catch { showToast('Failed to delete', 'error'); }
   };
 
   const mealsByType = MEAL_TYPES.reduce((acc, t) => {
@@ -225,123 +168,217 @@ export default function NutritionCalculator({ date }) {
   }, {});
 
   if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px', gap: '12px' }}>
-      <span className="spinner" style={{ width: '28px', height: '28px' }} />
-      <span style={{ color: 'var(--text-secondary)' }}>Loading nutrition data...</span>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: '12px' }}>
+      <span className="spinner" />
+      <span style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Loading nutrition data...</span>
     </div>
   );
 
+  /* ── Export current meals + summary to Excel ── */
+  const handleExportExcel = () => {
+    if (meals.length === 0) { showToast('No meals to export', 'info'); return; }
+
+    // Sheet 1 — full meal log
+    const mealHeaders = ['Date', 'Meal Type', 'Food Name', 'Quantity (g)', 'Calories (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)', 'Fiber (g)'];
+    const mealRows = meals.map(m => [
+      date,
+      m.meal_type,
+      m.food_name,
+      m.quantity,
+      m.calories,
+      m.protein,
+      m.carbohydrates,
+      m.fat,
+      m.fiber,
+    ]);
+
+    // Sheet 2 — daily totals vs goals
+    const summaryHeaders = ['Nutrient', 'Consumed', 'Goal', 'Remaining', 'Status'];
+    const g = goals || {};
+    const summaryRows = [
+      ['Calories (kcal)', totals.calories,      g.calories_goal || 0, Math.max(0, (g.calories_goal || 0) - totals.calories),      totals.calories > (g.calories_goal || 0) ? 'Over' : 'OK'],
+      ['Protein (g)',     totals.protein,        g.protein_goal  || 0, Math.max(0, (g.protein_goal  || 0) - totals.protein),        totals.protein  > (g.protein_goal  || 0) ? 'Over' : 'OK'],
+      ['Carbs (g)',       totals.carbohydrates,  g.carbs_goal    || 0, Math.max(0, (g.carbs_goal    || 0) - totals.carbohydrates),  totals.carbohydrates > (g.carbs_goal || 0) ? 'Over' : 'OK'],
+      ['Fat (g)',         totals.fat,            g.fat_goal      || 0, Math.max(0, (g.fat_goal      || 0) - totals.fat),            totals.fat  > (g.fat_goal      || 0) ? 'Over' : 'OK'],
+      ['Fiber (g)',       totals.fiber,          g.fiber_goal    || 0, Math.max(0, (g.fiber_goal    || 0) - totals.fiber),          totals.fiber > (g.fiber_goal   || 0) ? 'Over' : 'OK'],
+    ];
+
+    // Sheet 3 — breakdown per meal type
+    const breakdownHeaders = ['Meal Type', 'Items', 'Calories', 'Protein (g)', 'Carbs (g)', 'Fat (g)'];
+    const breakdownRows = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'].map(type => {
+      const items = meals.filter(m => m.meal_type === type);
+      return [
+        type,
+        items.length,
+        items.reduce((a, m) => a + m.calories,      0),
+        items.reduce((a, m) => a + m.protein,        0),
+        items.reduce((a, m) => a + m.carbohydrates,  0),
+        items.reduce((a, m) => a + m.fat,            0),
+      ];
+    });
+
+    exportToExcel(
+      [
+        { name: 'Meal Log',   headers: mealHeaders,      rows: mealRows      },
+        { name: 'Daily Goals', headers: summaryHeaders,   rows: summaryRows   },
+        { name: 'By Meal Type', headers: breakdownHeaders, rows: breakdownRows },
+      ],
+      `nutrition_${date}.xlsx`
+    );
+    showToast('Excel exported!', 'success');
+  };
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      {/* Header */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+      {/* Header actions */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
-          <h1 style={{ fontSize: '24px', marginBottom: '4px' }}>Nutrition Tracker</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
-            Track your daily macros and calories
-          </p>
-        </div>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Track your daily macros and calories</p>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button className="btn-secondary" onClick={() => setShowCalcForm(s => !s)}>
-            <Calculator size={14} /> {showCalcForm ? 'Hide Calculator' : 'Recalculate Goals'}
+          <button
+            className="btn-secondary"
+            onClick={handleExportExcel}
+            style={{ fontSize: '13px', padding: '7px 14px', color: '#4caf50', borderColor: 'rgba(76,175,80,0.4)' }}
+            title="Export current data to Excel"
+          >
+            <FileSpreadsheet size={14} /> Export Excel
+          </button>
+          <button className="btn-secondary" onClick={() => setShowCalcForm(s => !s)} style={{ fontSize: '13px', padding: '7px 14px' }}>
+            <Calculator size={13} /> {showCalcForm ? 'Hide' : 'Recalculate Goals'}
           </button>
           <button className="btn-primary" onClick={() => openAddMeal()}>
-            <Plus size={14} /> Add Food
+            <Plus size={14} /> Add Meal
           </button>
         </div>
+      </div>
+
+      {/* Top macro summary cards */}
+      <div className="grid-4" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+        <MacroTopCard label="Total Calories"  value={totals.calories}      unit="kcal consumed" color="var(--accent)"  sub={goals ? `Goal: ${Math.round(goals.calories_goal)} kcal` : null} />
+        <MacroTopCard label="Total Protein"   value={totals.protein}       unit="g"             color="#e53935"        sub={goals ? `Goal: ${Math.round(goals.protein_goal)}g`       : null} />
+        <MacroTopCard label="Carbohydrates"   value={totals.carbohydrates} unit="g"             color="#ff9800"        sub={goals ? `Goal: ${Math.round(goals.carbs_goal)}g`         : null} />
+        <MacroTopCard label="Total Fat"       value={totals.fat}           unit="g"             color="#ffeb3b"        sub={goals ? `Goal: ${Math.round(goals.fat_goal)}g`           : null} />
+        <MacroTopCard label="Meals Added"     value={meals.length}         unit=""              color="#4caf50"        sub={<span style={{ cursor: 'pointer', color: 'var(--accent)' }}>View details →</span>} />
       </div>
 
       {/* Recalculate form */}
       {showCalcForm && (
         <div className="stat-card fade-in">
-          <div className="section-title"><Calculator size={16} /> Nutrition Goal Calculator</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+          <div className="section-title" style={{ fontSize: '14px' }}><Calculator size={14} color="var(--accent)" /> Nutrition Goal Calculator</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '12px', marginBottom: '14px' }}>
             {[['Age', 'age', 'number'], ['Height (cm)', 'height', 'number'], ['Weight (kg)', 'weight', 'number']].map(([label, key, type]) => (
               <div className="form-group" key={key}>
                 <label className="form-label">{label}</label>
-                <input type={type} className="form-input" value={calcForm[key] || ''}
-                  onChange={e => setCalcForm(f => ({ ...f, [key]: e.target.value }))} />
+                <input type={type} className="form-input" value={calcForm[key] || ''} onChange={e => setCalcForm(f => ({ ...f, [key]: e.target.value }))} />
               </div>
             ))}
             <div className="form-group">
               <label className="form-label">Gender</label>
-              <select className="form-input" value={calcForm.gender || 'Male'}
-                onChange={e => setCalcForm(f => ({ ...f, gender: e.target.value }))}>
+              <select className="form-input" value={calcForm.gender || 'Male'} onChange={e => setCalcForm(f => ({ ...f, gender: e.target.value }))}>
                 <option>Male</option><option>Female</option><option>Other</option>
               </select>
             </div>
             <div className="form-group">
               <label className="form-label">Activity Level</label>
-              <select className="form-input" value={calcForm.activity_level || ''}
-                onChange={e => setCalcForm(f => ({ ...f, activity_level: e.target.value }))}>
+              <select className="form-input" value={calcForm.activity_level || ''} onChange={e => setCalcForm(f => ({ ...f, activity_level: e.target.value }))}>
                 {ACTIVITY_LEVELS.map(l => <option key={l}>{l}</option>)}
               </select>
             </div>
             <div className="form-group">
               <label className="form-label">Fitness Goal</label>
-              <select className="form-input" value={calcForm.fitness_goal || ''}
-                onChange={e => setCalcForm(f => ({ ...f, fitness_goal: e.target.value }))}>
+              <select className="form-input" value={calcForm.fitness_goal || ''} onChange={e => setCalcForm(f => ({ ...f, fitness_goal: e.target.value }))}>
                 {FITNESS_GOALS.map(g => <option key={g}>{g}</option>)}
               </select>
             </div>
           </div>
-          <button className="btn-primary" onClick={handleRecalculate}>
-            <Calculator size={14} /> Calculate & Save Goals
+          <button className="btn-primary" onClick={handleRecalculate} style={{ fontSize: '13px' }}>
+            <Calculator size={13} /> Calculate & Save Goals
           </button>
         </div>
       )}
 
-      {/* Goals cards */}
-      {goals && (
-        <div>
-          <div className="section-title" style={{ marginBottom: '14px' }}>🎯 Daily Goals</div>
-          <div className="grid-4" style={{ marginBottom: '16px' }}>
-            <NutritionCard label="Calories" icon="🔥" consumed={totals.calories} goal={goals.calories_goal} unit="kcal" color="#3b82f6" />
-            <NutritionCard label="Protein" icon="💪" consumed={totals.protein} goal={goals.protein_goal} unit="g" color="#3b82f6" />
-            <NutritionCard label="Carbohydrates" icon="🍚" consumed={totals.carbohydrates} goal={goals.carbs_goal} unit="g" color="#8b5cf6" />
-            <NutritionCard label="Fat" icon="🥑" consumed={totals.fat} goal={goals.fat_goal} unit="g" color="#f59e0b" />
-          </div>
-          <div className="grid-2">
-            <NutritionCard label="Fiber" icon="🌾" consumed={totals.fiber} goal={goals.fiber_goal} unit="g" color="#10b981" />
-          </div>
-        </div>
-      )}
-
-      {/* Summary bar */}
+      {/* Log a New Meal form */}
       <div className="stat-card">
-        <div className="section-title">📊 Consumption Summary</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <GoalBar label="Calories" icon="🔥" consumed={totals.calories} goal={goals?.calories_goal || 2000} unit="kcal" color="#3b82f6" />
-          <GoalBar label="Protein" icon="💪" consumed={totals.protein} goal={goals?.protein_goal || 140} unit="g" color="#3b82f6" />
-          <GoalBar label="Carbohydrates" icon="🍚" consumed={totals.carbohydrates} goal={goals?.carbs_goal || 240} unit="g" color="#8b5cf6" />
-          <GoalBar label="Fat" icon="🥑" consumed={totals.fat} goal={goals?.fat_goal || 60} unit="g" color="#f59e0b" />
-          <GoalBar label="Fiber" icon="🌾" consumed={totals.fiber} goal={goals?.fiber_goal || 25} unit="g" color="#10b981" />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <div style={{ fontSize: '14px', fontWeight: '600' }}>Log a New Meal</div>
+          <button
+            onClick={() => openAddMeal()}
+            style={{ background: 'none', border: '1px solid hsl(var(--border-color))', borderRadius: '50%', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--accent)' }}
+          >
+            <Plus size={14} />
+          </button>
         </div>
+
+        {/* Consumption summary bars */}
+        {goals && (
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <GoalBar label="Calories"      icon="🔥" consumed={totals.calories}      goal={goals.calories_goal} unit="kcal" color="var(--accent)" />
+            <GoalBar label="Protein"       icon="💪" consumed={totals.protein}       goal={goals.protein_goal}  unit="g"    color="#e53935"        />
+            <GoalBar label="Carbohydrates" icon="🍚" consumed={totals.carbohydrates} goal={goals.carbs_goal}    unit="g"    color="#ff9800"        />
+            <GoalBar label="Fat"           icon="🥑" consumed={totals.fat}           goal={goals.fat_goal}      unit="g"    color="#ffeb3b"        />
+            <GoalBar label="Fiber"         icon="🌾" consumed={totals.fiber}         goal={goals.fiber_goal}    unit="g"    color="#4caf50"        />
+          </div>
+        )}
       </div>
 
-      {/* Meal sections */}
-      <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-          <div className="section-title" style={{ marginBottom: 0 }}>🍽 Meal Log</div>
+      {/* Meal History */}
+      <div className="stat-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <div style={{ fontSize: '14px', fontWeight: '600' }}>Meal History</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+            <Calendar size={12} /> Filter by Date
+          </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {MEAL_TYPES.map(type => (
-            <div key={type}>
-              <MealSection
-                mealType={type}
-                meals={mealsByType[type]}
-                onEdit={openEditMeal}
-                onDelete={handleDeleteMeal}
-              />
-              <button
-                className="btn-secondary"
-                onClick={() => openAddMeal(type)}
-                style={{ marginTop: '8px', fontSize: '13px', padding: '7px 14px' }}
-              >
-                <Plus size={13} /> Add to {type}
-              </button>
-            </div>
-          ))}
+
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Food Name</th>
+              <th>Calories</th>
+              <th>Protein</th>
+              <th>Carbs</th>
+              <th>Fat</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {meals.length === 0 ? (
+              <tr><td colSpan="7" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>No meals logged yet</td></tr>
+            ) : meals.map(m => {
+              const color = MEAL_COLORS[m.meal_type] || '#aaa';
+              return (
+                <tr key={m.id}>
+                  <td>
+                    <span className="badge" style={{ background: color + '22', color, border: '1px solid ' + color + '55', fontSize: '9px' }}>
+                      {m.meal_type}
+                    </span>
+                  </td>
+                  <td style={{ fontWeight: '500', color: '#fff' }}>{m.food_name}</td>
+                  <td style={{ color: 'var(--accent)' }}>{m.calories} kcal</td>
+                  <td style={{ color: '#e53935' }}>{m.protein}g</td>
+                  <td>{m.carbohydrates}g</td>
+                  <td>{m.fat}g</td>
+                  <td>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button onClick={() => openEditMeal(m)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                        onMouseEnter={e => e.currentTarget.style.color = '#fff'} onMouseLeave={e => e.currentTarget.style.color = 'var(--text-secondary)'}>
+                        <Edit2 size={13} />
+                      </button>
+                      <button onClick={() => handleDeleteMeal(m.id)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                        onMouseEnter={e => e.currentTarget.style.color = 'var(--accent)'} onMouseLeave={e => e.currentTarget.style.color = 'var(--text-secondary)'}>
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Showing {meals.length} of {meals.length} meals recorded today</span>
         </div>
       </div>
 
@@ -352,45 +389,37 @@ export default function NutritionCalculator({ date }) {
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowMealModal(false)}>
           <div className="modal-box">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ fontSize: '18px' }}>{editingMeal ? 'Edit Meal' : 'Add Food'}</h3>
+              <h3 style={{ fontSize: '16px' }}>{editingMeal ? 'Edit Meal' : 'Add Meal'}</h3>
               <button onClick={() => setShowMealModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-                <X size={18} />
+                <X size={16} />
               </button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {/* Food Search */}
               {!editingMeal && (
                 <div style={{ position: 'relative' }}>
                   <div className="form-group">
                     <label className="form-label">Search Food Library</label>
                     <div style={{ position: 'relative' }}>
-                      <Search size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
-                      <input
-                        className="form-input" placeholder="Search foods..."
-                        value={foodSearch} onChange={e => handleFoodSearch(e.target.value)}
-                        style={{ paddingLeft: '34px' }}
-                      />
+                      <Search size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+                      <input className="form-input" placeholder="Search foods..." value={foodSearch}
+                        onChange={e => handleFoodSearch(e.target.value)} style={{ paddingLeft: '30px' }} />
                     </div>
                   </div>
                   {foodResults.length > 0 && (
-                    <div style={{
-                      position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
-                      background: 'var(--bg-card)', border: '1px solid hsl(var(--border-color))',
-                      borderRadius: '8px', overflow: 'hidden',
-                    }}>
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20, background: 'var(--bg-card)', border: '1px solid hsl(var(--border-color))', borderRadius: '6px', overflow: 'hidden' }}>
                       {foodResults.slice(0, 8).map(f => (
                         <button key={f.id} onClick={() => fillFromFood(f)} style={{
                           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                          padding: '10px 14px', width: '100%', background: 'none', border: 'none',
+                          padding: '9px 14px', width: '100%', background: 'none', border: 'none',
                           color: 'var(--text-primary)', cursor: 'pointer', fontSize: '13px',
-                          borderBottom: '1px solid rgba(255,255,255,0.05)',
+                          borderBottom: '1px solid rgba(255,255,255,0.04)',
                         }}
-                          onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
+                          onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-card2)'}
                           onMouseLeave={e => e.currentTarget.style.background = 'none'}
                         >
                           <span>{f.name}</span>
-                          <span style={{ color: '#f59e0b', fontSize: '12px' }}>{f.calories} kcal</span>
+                          <span style={{ color: 'var(--accent)', fontSize: '12px' }}>{f.calories} kcal</span>
                         </button>
                       ))}
                     </div>
@@ -400,27 +429,26 @@ export default function NutritionCalculator({ date }) {
 
               <div className="form-group">
                 <label className="form-label">Meal Type</label>
-                <select className="form-input" value={mealForm.meal_type}
-                  onChange={e => setMealForm(f => ({ ...f, meal_type: e.target.value }))}>
+                <select className="form-input" value={mealForm.meal_type} onChange={e => setMealForm(f => ({ ...f, meal_type: e.target.value }))}>
                   {MEAL_TYPES.map(t => <option key={t}>{t}</option>)}
                 </select>
               </div>
 
               <div className="form-group">
                 <label className="form-label">Food Name *</label>
-                <input className="form-input" placeholder="e.g. Chicken Breast" value={mealForm.food_name}
+                <input className="form-input" placeholder="e.g. Grilled Chicken Breast" value={mealForm.food_name}
                   onChange={e => setMealForm(f => ({ ...f, food_name: e.target.value }))} />
               </div>
 
               <div className="grid-2">
                 <div className="form-group">
-                  <label className="form-label">Quantity (g/serving)</label>
-                  <input type="number" className="form-input" value={mealForm.quantity}
+                  <label className="form-label">Quantity (g)</label>
+                  <input type="number" className="form-input" placeholder="200g" value={mealForm.quantity}
                     onChange={e => setMealForm(f => ({ ...f, quantity: e.target.value }))} min="0" />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Calories (kcal) *</label>
-                  <input type="number" className="form-input" value={mealForm.calories}
+                  <label className="form-label">Calories *</label>
+                  <input type="number" className="form-input" placeholder="330" value={mealForm.calories}
                     onChange={e => setMealForm(f => ({ ...f, calories: e.target.value }))} min="0" />
                 </div>
               </div>
@@ -428,12 +456,12 @@ export default function NutritionCalculator({ date }) {
               <div className="grid-2">
                 <div className="form-group">
                   <label className="form-label">Protein (g)</label>
-                  <input type="number" className="form-input" value={mealForm.protein}
+                  <input type="number" className="form-input" placeholder="62" value={mealForm.protein}
                     onChange={e => setMealForm(f => ({ ...f, protein: e.target.value }))} min="0" step="0.1" />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Carbohydrates (g)</label>
-                  <input type="number" className="form-input" value={mealForm.carbohydrates}
+                  <label className="form-label">Carbs (g)</label>
+                  <input type="number" className="form-input" placeholder="0" value={mealForm.carbohydrates}
                     onChange={e => setMealForm(f => ({ ...f, carbohydrates: e.target.value }))} min="0" step="0.1" />
                 </div>
               </div>
@@ -441,7 +469,7 @@ export default function NutritionCalculator({ date }) {
               <div className="grid-2">
                 <div className="form-group">
                   <label className="form-label">Fat (g)</label>
-                  <input type="number" className="form-input" value={mealForm.fat}
+                  <input type="number" className="form-input" placeholder="7" value={mealForm.fat}
                     onChange={e => setMealForm(f => ({ ...f, fat: e.target.value }))} min="0" step="0.1" />
                 </div>
                 <div className="form-group">
@@ -453,11 +481,9 @@ export default function NutritionCalculator({ date }) {
 
               <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
                 <button className="btn-primary" onClick={handleSaveMeal} style={{ flex: 1, justifyContent: 'center' }}>
-                  <Check size={15} /> {editingMeal ? 'Update Meal' : 'Add Meal'}
+                  <Check size={14} /> {editingMeal ? 'Update Meal' : 'Add Meal'}
                 </button>
-                <button className="btn-secondary" onClick={() => setShowMealModal(false)}>
-                  Cancel
-                </button>
+                <button className="btn-secondary" onClick={() => setShowMealModal(false)}>Cancel</button>
               </div>
             </div>
           </div>
